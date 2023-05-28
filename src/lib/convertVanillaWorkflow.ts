@@ -1,7 +1,7 @@
 import { LGraph, type INodeInputSlot, type SerializedLGraph, type LinkID, type UUID, type NodeID, LiteGraph, BuiltInSlotType, type SerializedLGraphNode, type Vector2, BuiltInSlotShape, type INodeOutputSlot, type SlotType } from "@litegraph-ts/core";
 import type { SerializedAppState } from "./components/ComfyApp";
 import layoutStates, { defaultWorkflowAttributes, type ContainerLayout, type DragItemID, type SerializedDragEntry, type SerializedLayoutState, type WritableLayoutStateStore } from "./stores/layoutStates";
-import { ComfyWorkflow, type WorkflowAttributes } from "./stores/workflowState";
+import { ComfyBoxWorkflow, type WorkflowAttributes } from "./stores/workflowState";
 import type { SerializedGraphCanvasState } from "./ComfyGraphCanvas";
 import ComfyApp from "./components/ComfyApp";
 import { iterateNodeDefInputs, type ComfyNodeDefInputType, type ComfyNodeDefInputOptions } from "./ComfyNodeDef";
@@ -346,8 +346,8 @@ function removeSerializedNode(vanillaWorkflow: SerializedLGraph, node: Serialize
  * Converts a workflow saved with vanilla ComfyUI into a ComfyBox workflow,
  * adding UI nodes for each widget.
  */
-export default function convertVanillaWorkflow(vanillaWorkflow: ComfyVanillaWorkflow, attrs: WorkflowAttributes): [ComfyWorkflow, WritableLayoutStateStore] {
-    const [comfyBoxWorkflow, layoutState] = ComfyWorkflow.create();
+export default function convertVanillaWorkflow(vanillaWorkflow: ComfyVanillaWorkflow, attrs: WorkflowAttributes): [ComfyBoxWorkflow, WritableLayoutStateStore] {
+    const [comfyBoxWorkflow, layoutState] = ComfyBoxWorkflow.create();
     const { root, left, right } = layoutState.initDefaultLayout();
 
     // TODO will need to convert IDs to UUIDs
@@ -391,8 +391,7 @@ export default function convertVanillaWorkflow(vanillaWorkflow: ComfyVanillaWork
         // Lazily create group in case there are no inputs
         let group: ContainerLayout | null = null;
 
-        // TODO needs to be generalized!
-        let isOutputNode = ["PreviewImage", "SaveImage"].indexOf(node.type) !== -1
+        let isOutputNode = def.nodeDef.output_node
 
         for (const [inputName, [inputType, inputOpts]] of iterateNodeDefInputs(def.nodeDef)) {
             // Detect if this input was a widget converted to an input
@@ -475,7 +474,7 @@ export default function convertVanillaWorkflow(vanillaWorkflow: ComfyVanillaWork
         }
 
         // Add OUTPUT event slot to output nodes
-        // TODO needs to be generalized!
+        // For now assume that all output nodes will send back images
         if (isOutputNode) {
             const newOutput: INodeOutputSlot = {
                 name: "OUTPUT",

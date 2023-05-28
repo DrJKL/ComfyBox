@@ -8,8 +8,10 @@ import layoutStates from './layoutStates';
 import { v4 as uuidv4 } from "uuid";
 import type ComfyGraphCanvas from '$lib/ComfyGraphCanvas';
 import { blankGraph } from '$lib/defaultGraph';
-import type { SerializedAppState } from '$lib/components/ComfyApp';
+import type { SerializedAppState, SerializedPrompt } from '$lib/components/ComfyApp';
 import type ComfyReceiveOutputNode from '$lib/nodes/actions/ComfyReceiveOutputNode';
+import type { ComfyBoxPromptExtraData, PromptID } from '$lib/api';
+import type { ComfyAPIPromptErrorResponse, ComfyExecutionError } from '$lib/apiErrors';
 
 type ActiveCanvas = {
     canvas: LGraphCanvas | null;
@@ -54,9 +56,31 @@ export type WorkflowAttributes = {
      * Comfy.QueueEvents node.
      */
     queuePromptButtonRunWorkflow: boolean,
+
+    /*
+     * If true, notifications will be shown when a prompt is queued and
+     * completed. Set to false if you need more detailed control over the
+     * notification type/contents, and use the `ComfyNotifyAction` node instead.
+     */
+    showDefaultNotifications: boolean,
 }
 
-export class ComfyWorkflow {
+export type WorkflowValidationError = {
+    type: "validation"
+    workflowID: WorkflowInstID,
+    error: ComfyAPIPromptErrorResponse,
+    prompt: SerializedPrompt,
+    extraData: ComfyBoxPromptExtraData
+}
+
+export type WorkflowExecutionError = {
+    type: "execution"
+    error: ComfyExecutionError,
+}
+
+export type WorkflowError = WorkflowValidationError | WorkflowExecutionError;
+
+export class ComfyBoxWorkflow {
     /*
      * Used for uniquely identifying the instance of the opened workflow in the frontend.
      */
@@ -81,6 +105,11 @@ export class ComfyWorkflow {
      * Missing node types encountered when deserializing the graph
      */
     missingNodeTypes: Set<string> = new Set();
+
+    /*
+     * Completed queue entry ID that holds the last validation/execution error.
+     */
+    lastError?: PromptID
 
     get layout(): WritableLayoutStateStore | null {
         return layoutStates.getLayout(this.id)
@@ -176,8 +205,8 @@ export class ComfyWorkflow {
      * will not. If you change your mind later be sure to call
      * layoutStates.remove(workflow.id)!
      */
-    static create(title: string = "New Workflow"): [ComfyWorkflow, WritableLayoutStateStore] {
-        const workflow = new ComfyWorkflow(title);
+    static create(title: string = "New Workflow"): [ComfyBoxWorkflow, WritableLayoutStateStore] {
+        const workflow = new ComfyBoxWorkflow(title);
         const layoutState = layoutStates.create(workflow);
         return [workflow, layoutState]
     }
@@ -217,7 +246,7 @@ export class ComfyWorkflow {
             // this.#invokeExtensions("loadedGraphNode", node);
         }
 
-        this.attrs = data.attrs;
+        this.attrs = { ...defaultWorkflowAttributes, ...data.attrs };
 
         // Now restore the layout
         // Subsequent added nodes will add the UI data to layoutState
@@ -227,30 +256,33 @@ export class ComfyWorkflow {
 }
 
 export type WorkflowState = {
-    openedWorkflows: ComfyWorkflow[],
-    openedWorkflowsByID: Record<WorkflowInstID, ComfyWorkflow>,
+    openedWorkflows: ComfyBoxWorkflow[],
+    openedWorkflowsByID: Record<WorkflowInstID, ComfyBoxWorkflow>,
     activeWorkflowID: WorkflowInstID | null,
-    activeWorkflow: ComfyWorkflow | null,
+    activeWorkflow: ComfyBoxWorkflow | null,
 }
 
 export type WorkflowReceiveOutputTargets = {
-    workflow: ComfyWorkflow,
+    workflow: ComfyBoxWorkflow,
     targetNodes: ComfyReceiveOutputNode[]
 }
 
 type WorkflowStateOps = {
-    getWorkflow: (id: WorkflowInstID) => ComfyWorkflow | null
-    getWorkflowByGraph: (graph: LGraph) => ComfyWorkflow | null
-    getWorkflowByNode: (node: LGraphNode) => ComfyWorkflow | null
-    getWorkflowByNodeID: (id: NodeID) => ComfyWorkflow | null
-    getActiveWorkflow: () => ComfyWorkflow | null
-    createNewWorkflow: (canvas: ComfyGraphCanvas, title?: string, setActive?: boolean) => ComfyWorkflow,
-    openWorkflow: (canvas: ComfyGraphCanvas, data: SerializedAppState, setActive?: boolean) => ComfyWorkflow,
-    addWorkflow: (canvas: ComfyGraphCanvas, data: ComfyWorkflow, setActive?: boolean) => void,
+    getWorkflow: (id: WorkflowInstID) => ComfyBoxWorkflow | null
+    getWorkflowByGraph: (graph: LGraph) => ComfyBoxWorkflow | null
+    getWorkflowByNode: (node: LGraphNode) => ComfyBoxWorkflow | null
+    getWorkflowByNodeID: (id: NodeID) => ComfyBoxWorkflow | null
+    getActiveWorkflow: () => ComfyBoxWorkflow | null
+    createNewWorkflow: (canvas: ComfyGraphCanvas, title?: string, setActive?: boolean) => ComfyBoxWorkflow,
+    openWorkflow: (canvas: ComfyGraphCanvas, data: SerializedAppState, setActive?: boolean) => ComfyBoxWorkflow,
+    addWorkflow: (canvas: ComfyGraphCanvas, data: ComfyBoxWorkflow, setActive?: boolean) => void,
     closeWorkflow: (canvas: ComfyGraphCanvas, index: number) => void,
     closeAllWorkflows: (canvas: ComfyGraphCanvas) => void,
-    setActiveWorkflow: (canvas: ComfyGraphCanvas, index: number | WorkflowInstID) => ComfyWorkflow | null,
-    findReceiveOutputTargets: (type: SlotType | SlotType[]) => WorkflowReceiveOutputTargets[]
+    setActiveWorkflow: (canvas: ComfyGraphCanvas, index: number | WorkflowInstID) => ComfyBoxWorkflow | null,
+    findReceiveOutputTargets: (type: SlotType | SlotType[]) => WorkflowReceiveOutputTargets[],
+    afterQueued: (id: WorkflowInstID, promptID: PromptID) => void
+    promptError: (id: WorkflowInstID, promptID: PromptID) => void
+    executionError: (id: WorkflowInstID, promptID: PromptID) => void
 }
 
 export type WritableWorkflowStateStore = Writable<WorkflowState> & WorkflowStateOps;
@@ -262,36 +294,36 @@ const store: Writable<WorkflowState> = writable(
         activeWorkflow: null
     })
 
-function getWorkflow(id: WorkflowInstID): ComfyWorkflow | null {
+function getWorkflow(id: WorkflowInstID): ComfyBoxWorkflow | null {
     return get(store).openedWorkflowsByID[id];
 }
 
-function getWorkflowByGraph(graph: LGraph): ComfyWorkflow | null {
+function getWorkflowByGraph(graph: LGraph): ComfyBoxWorkflow | null {
     const workflowID = (graph.getRootGraph() as ComfyGraph)?.workflowID;
     if (workflowID == null)
         return null;
     return getWorkflow(workflowID);
 }
 
-function getWorkflowByNode(node: LGraphNode): ComfyWorkflow | null {
+function getWorkflowByNode(node: LGraphNode): ComfyBoxWorkflow | null {
     return getWorkflowByGraph(node.graph);
 }
 
-function getWorkflowByNodeID(id: NodeID): ComfyWorkflow | null {
+function getWorkflowByNodeID(id: NodeID): ComfyBoxWorkflow | null {
     return Object.values(get(store).openedWorkflows).find(w => {
         return w.graph.getNodeByIdRecursive(id) != null
     })
 }
 
-function getActiveWorkflow(): ComfyWorkflow | null {
+function getActiveWorkflow(): ComfyBoxWorkflow | null {
     const state = get(store);
     if (state.activeWorkflowID == null)
         return null;
     return state.openedWorkflowsByID[state.activeWorkflowID];
 }
 
-function createNewWorkflow(canvas: ComfyGraphCanvas, title: string = "New Workflow", setActive: boolean = false): ComfyWorkflow {
-    const workflow = new ComfyWorkflow(title);
+function createNewWorkflow(canvas: ComfyGraphCanvas, title: string = "New Workflow", setActive: boolean = false): ComfyBoxWorkflow {
+    const workflow = new ComfyBoxWorkflow(title);
     const layoutState = layoutStates.create(workflow);
     layoutState.initDefaultLayout();
 
@@ -307,8 +339,8 @@ function createNewWorkflow(canvas: ComfyGraphCanvas, title: string = "New Workfl
     return workflow;
 }
 
-function openWorkflow(canvas: ComfyGraphCanvas, data: SerializedAppState, setActive: boolean = true): ComfyWorkflow {
-    const [workflow, layoutState] = ComfyWorkflow.create("Workflow")
+function openWorkflow(canvas: ComfyGraphCanvas, data: SerializedAppState, setActive: boolean = true): ComfyBoxWorkflow {
+    const [workflow, layoutState] = ComfyBoxWorkflow.create("Workflow")
     workflow.deserialize(layoutState, { graph: data.workflow, layout: data.layout, attrs: data.attrs })
 
     addWorkflow(canvas, workflow, setActive);
@@ -316,7 +348,7 @@ function openWorkflow(canvas: ComfyGraphCanvas, data: SerializedAppState, setAct
     return workflow;
 }
 
-function addWorkflow(canvas: ComfyGraphCanvas, workflow: ComfyWorkflow, setActive: boolean = true) {
+function addWorkflow(canvas: ComfyGraphCanvas, workflow: ComfyBoxWorkflow, setActive: boolean = true) {
     const state = get(store);
     state.openedWorkflows.push(workflow);
     state.openedWorkflowsByID[workflow.id] = workflow;
@@ -354,7 +386,7 @@ function closeAllWorkflows(canvas: ComfyGraphCanvas) {
         closeWorkflow(canvas, 0)
 }
 
-function setActiveWorkflow(canvas: ComfyGraphCanvas, index: number | WorkflowInstID): ComfyWorkflow | null {
+function setActiveWorkflow(canvas: ComfyGraphCanvas, index: number | WorkflowInstID): ComfyBoxWorkflow | null {
     const state = get(store);
 
     if (state.openedWorkflows.length === 0) {
@@ -413,6 +445,36 @@ function findReceiveOutputTargets(type: SlotType | SlotType[]): WorkflowReceiveO
     return result;
 }
 
+function afterQueued(id: WorkflowInstID, promptID: PromptID) {
+    const workflow = getWorkflow(id);
+    if (workflow == null) {
+        console.warn("[workflowState] afterQueued: workflow not found", id, promptID)
+        return
+    }
+
+    workflow.lastError = null;
+}
+
+function promptError(id: WorkflowInstID, promptID: PromptID) {
+    const workflow = getWorkflow(id);
+    if (workflow == null) {
+        console.warn("[workflowState] promptError: workflow not found", id, promptID)
+        return
+    }
+
+    workflow.lastError = promptID;
+}
+
+function executionError(id: WorkflowInstID, promptID: PromptID) {
+    const workflow = getWorkflow(id);
+    if (workflow == null) {
+        console.warn("[workflowState] executionError: workflow not found", id, promptID)
+        return
+    }
+
+    workflow.lastError = promptID;
+}
+
 const workflowStateStore: WritableWorkflowStateStore =
 {
     ...store,
@@ -427,6 +489,9 @@ const workflowStateStore: WritableWorkflowStateStore =
     closeWorkflow,
     closeAllWorkflows,
     setActiveWorkflow,
-    findReceiveOutputTargets
+    findReceiveOutputTargets,
+    afterQueued,
+    promptError,
+    executionError,
 }
 export default workflowStateStore;

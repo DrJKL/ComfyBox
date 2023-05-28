@@ -8,9 +8,9 @@ import type IComfyInputSlot from "$lib/IComfyInputSlot";
 import uiState from "$lib/stores/uiState";
 import { get } from "svelte/store";
 import configState from "$lib/stores/configState";
-import type { WritableLayoutStateStore } from "$lib/stores/layoutStates";
+import type { WidgetLayout, WritableLayoutStateStore } from "$lib/stores/layoutStates";
 import layoutStates from "$lib/stores/layoutStates";
-import workflowStateStore, { ComfyWorkflow } from "$lib/stores/workflowState";
+import workflowStateStore, { ComfyBoxWorkflow } from "$lib/stores/workflowState";
 
 export type DefaultWidgetSpec = {
     defaultWidgetNode: new (name?: string) => ComfyWidgetNode,
@@ -103,11 +103,25 @@ export default class ComfyGraphNode extends LGraphNode {
         return null;
     }
 
+    /*
+     * Traverses this node backwards in the graph in order to determine the type
+     * for slot type inheritance. This is used if there isn't a valid upstream
+     * link but the output type can be inferred otherwise (for example from
+     * properties or other connected inputs)
+     */
+    getUpstreamLinkForInheritedType(): LLink | null {
+        return this.getUpstreamLink();
+    }
+
     get layoutState(): WritableLayoutStateStore | null {
         return layoutStates.getLayoutByNode(this);
     }
 
-    get workflow(): ComfyWorkflow | null {
+    get dragItem(): WidgetLayout | null {
+        return layoutStates.getDragItemByNode(this);
+    }
+
+    get workflow(): ComfyBoxWorkflow | null {
         return workflowStateStore.getWorkflowByNode(this);
     }
 
@@ -147,7 +161,7 @@ export default class ComfyGraphNode extends LGraphNode {
 
         while (currentNode) {
             updateNodes.unshift(currentNode);
-            const link = currentNode.getUpstreamLink();
+            const link = currentNode.getUpstreamLinkForInheritedType();
             if (link !== null) {
                 const node = this.graph.getNodeById(link.origin_id) as ComfyGraphNode;
                 if (node.canInheritSlotTypes) {
@@ -196,8 +210,9 @@ export default class ComfyGraphNode extends LGraphNode {
                                 updateNodes.push(node);
                             } else {
                                 // We've found an output
-                                const nodeOutType = node.inputs && node.inputs[link?.target_slot] && node.inputs[link.target_slot].type ? node.inputs[link.target_slot].type : null;
-                                if (inputType && nodeOutType !== inputType) {
+                                let nodeOutType = node.inputs && node.inputs[link?.target_slot] != null ? node.inputs[link.target_slot].type : null;
+                                nodeOutType ||= "*"
+                                if (inputType && nodeOutType !== inputType && nodeOutType !== "*") {
                                     // The output doesnt match our input so disconnect it
                                     node.disconnectInput(link.target_slot);
                                 } else {
@@ -307,7 +322,13 @@ export default class ComfyGraphNode extends LGraphNode {
         }
 
         (o as any).saveUserState = this.saveUserState
-        if (!this.saveUserState && (!get(uiState).isSavingToLocalStorage || get(configState).alwaysStripUserState)) {
+
+        let saveUserState = this.saveUserState || get(configState).alwaysStripUserState;
+        const forceSaveUserState = get(uiState).forceSaveUserState;
+        if (forceSaveUserState !== null)
+            saveUserState = forceSaveUserState;
+
+        if (!saveUserState) {
             this.stripUserState(o)
             console.debug("[ComfyGraphNode] stripUserState", this, o)
         }

@@ -2,7 +2,7 @@
   "comfyBoxWorkflow": true,
   "createdBy": "ComfyBox",
   "version": 1,
-  "commitHash": "test",
+  "commitHash": "60bd9899150678dbc46df543ac16e1099d58a07f\n",
   "workflow": {
     "last_node_id": 0,
     "last_link_id": 0,
@@ -176,7 +176,7 @@
         "widgets_values": [],
         "color": "#223",
         "bgColor": "#335",
-        "comfyValue": "A",
+        "comfyValue": null,
         "shownOutputProperties": {},
         "saveUserState": false
       },
@@ -391,7 +391,7 @@
         "title": "UI.Gallery",
         "properties": {
           "tags": [],
-          "defaultValue": null,
+          "defaultValue": [],
           "index": 0,
           "updateMode": "replace",
           "autoSelectOnUpdate": true
@@ -502,7 +502,7 @@
         ],
         "title": "UI.ImageUpload",
         "properties": {
-          "defaultValue": null,
+          "defaultValue": [],
           "tags": []
         },
         "widgets_values": [],
@@ -632,7 +632,8 @@
   "attrs": {
     "title": "Upscale by Model",
     "queuePromptButtonName": "Queue Prompt",
-    "queuePromptButtonRunWorkflow": true
+    "queuePromptButtonRunWorkflow": true,
+    "showDefaultNotifications": true
   },
   "layout": {
     "root": "46a08906-61a9-4a23-881b-9615cf165e33",
@@ -654,7 +655,8 @@
             "openOnStartup": false,
             "buttonVariant": "primary",
             "buttonSize": "large",
-            "tags": []
+            "tags": [],
+            "destroyChildOnClose": false
           }
         },
         "children": [
@@ -679,7 +681,8 @@
             "openOnStartup": false,
             "buttonVariant": "primary",
             "buttonSize": "large",
-            "tags": []
+            "tags": [],
+            "destroyChildOnClose": false
           }
         },
         "children": [
@@ -705,7 +708,8 @@
             "openOnStartup": false,
             "buttonVariant": "primary",
             "buttonSize": "large",
-            "tags": []
+            "tags": [],
+            "destroyChildOnClose": false
           }
         },
         "children": [
@@ -732,7 +736,8 @@
             "openOnStartup": false,
             "buttonVariant": "primary",
             "buttonSize": "large",
-            "tags": []
+            "tags": [],
+            "destroyChildOnClose": false
           }
         },
         "children": [],
@@ -744,7 +749,7 @@
           "id": "2f0371e8-559e-4a58-a5d1-0a50117675fc",
           "nodeId": "578edfae-2767-4b23-9a3b-6edd8ccad1dd",
           "attrs": {
-            "title": "model_name",
+            "title": "Modal Name",
             "hidden": false,
             "disabled": false,
             "direction": "vertical",
@@ -756,7 +761,8 @@
             "openOnStartup": false,
             "buttonVariant": "primary",
             "buttonSize": "large",
-            "tags": []
+            "tags": [],
+            "destroyChildOnClose": false
           }
         },
         "children": [],
@@ -779,7 +785,8 @@
             "openOnStartup": false,
             "buttonVariant": "primary",
             "buttonSize": "large",
-            "tags": []
+            "tags": [],
+            "destroyChildOnClose": false
           }
         },
         "children": [
@@ -793,7 +800,7 @@
           "id": "db12215f-fd9c-463f-9fbd-26b79e994e0e",
           "nodeId": "59feacdf-de02-4b1e-b8ba-e219ba5126b7",
           "attrs": {
-            "title": "filename_prefix",
+            "title": "Filename Prefix",
             "hidden": false,
             "disabled": false,
             "direction": "vertical",
@@ -805,7 +812,8 @@
             "openOnStartup": false,
             "buttonVariant": "primary",
             "buttonSize": "large",
-            "tags": []
+            "tags": [],
+            "destroyChildOnClose": false
           }
         },
         "children": [],
@@ -828,7 +836,8 @@
             "openOnStartup": false,
             "buttonVariant": "primary",
             "buttonSize": "large",
-            "tags": []
+            "tags": [],
+            "destroyChildOnClose": false
           }
         },
         "children": [
@@ -849,12 +858,13 @@
             "classes": "",
             "style": "",
             "nodeDisabledState": "hidden",
-            "variant": "gallery",
+            "variant": "image",
             "containerVariant": "hidden",
             "openOnStartup": false,
             "buttonVariant": "primary",
             "buttonSize": "large",
-            "tags": []
+            "tags": [],
+            "destroyChildOnClose": false
           }
         },
         "children": [],

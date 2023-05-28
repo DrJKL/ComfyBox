@@ -6,10 +6,13 @@ body {
 
     // Disable pull to refresh
     overscroll-behavior-y: contain;
-}
 
-#app-root {
     background: var(--body-background-fill);
+
+    width: 100%;
+    height: 100%;
+    margin: 0px;
+    font-family: Arial;
 }
 
 :root {
@@ -125,6 +128,7 @@ body {
     border-color: var(--comfy-disabled-textbox-border-color);
     box-shadow: 0 0 0 var(--shadow-spread) transparent, rgba(0, 0, 0, 0.08) 0px 2px 4px 0px inset;
     cursor: not-allowed;
+    color: var(--comfy-disabled-label-color);
 }
 
 @mixin disable-inputs {
@@ -140,6 +144,23 @@ body {
     :global(label:has(textarea:disabled) > span) {
         color: var(--comfy-disabled-label-color);
     }
+}
+
+@mixin json-view {
+    --jsonPaddingLeft: 1rem;
+    --jsonBorderLeft: 1px dotted var(--neutral-600);
+    --jsonBracketColor: currentcolor;
+    --jsonBracketHoverBackground: var(--primary-200);
+    --jsonSeparatorColor: currentcolor;
+    --jsonKeyColor: var(--body-text-color);
+    --jsonValColor: var(--body-text-color-subdued);
+    --jsonValStringColor: var(--color-green-500);
+    --jsonValNumberColor: var(--color-blue-500);
+    --jsonValBooleanColor: var(--color-red-500);
+    --jsonCollapsedColor: var(--neutral-100);
+    --jsonCollapsedBackground: var(--primary-400);
+
+    font-family: monospace;
 }
 
 hr {
@@ -215,4 +236,9 @@ button {
         background: var(--block-background-fill) !important;
     }
 
+}
+
+// fixes drop item shadow not appearing when dragging template items onto workflow
+:global([data-is-dnd-shadow-item]) {
+    min-height: 5rem;
 }

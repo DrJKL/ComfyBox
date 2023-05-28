@@ -7,7 +7,9 @@ export type ModalState = Record<string, any>;
 export type ModalButton = {
     name: string,
     variant: "primary" | "secondary",
-    onClick: (state: ModalData) => void,
+    onClick: (state: ModalData) => boolean | void,
+    disabled?: boolean,
+    hidden?: boolean,
     closeOnClick?: boolean
 }
 export interface ModalData {

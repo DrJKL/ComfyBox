@@ -6,13 +6,18 @@ import FullReload from 'vite-plugin-full-reload';
 import { viteStaticCopy } from 'vite-plugin-static-copy'
 import removeConsole from 'vite-plugin-svelte-console-remover';
 import glsl from 'vite-plugin-glsl';
+import { execSync } from "child_process"
+import { visualizer } from "rollup-plugin-visualizer";
 
 const isProduction = process.env.NODE_ENV === "production";
 console.log("Production build: " + isProduction)
 
+const commitHash = execSync('git rev-parse HEAD').toString();
+console.log("Commit: " + commitHash)
+
 export default defineConfig({
     define: {
-        "__GIT_COMMIT_HASH__": '"test"'
+        "__GIT_COMMIT_HASH__": JSON.stringify(commitHash)
     },
     clearScreen: false,
     base: "./",
@@ -26,6 +31,7 @@ export default defineConfig({
         isProduction && removeConsole(),
         glsl(),
         svelte(),
+        visualizer(),
         viteStaticCopy({
             targets: [
                 {

@@ -1,12 +1,13 @@
 import { type WidgetLayout, type WritableLayoutStateStore } from "$lib/stores/layoutStates";
 import selectionState from "$lib/stores/selectionState";
 import type { FileData as GradioFileData } from "@gradio/upload";
-import { Subgraph, type LGraph, type LGraphNode, type LLink, type SerializedLGraph, type UUID, type NodeID, type SlotType } from "@litegraph-ts/core";
+import { Subgraph, type LGraph, type LGraphNode, type LLink, type SerializedLGraph, type UUID, type NodeID, type SlotType, type Vector4, type SerializedLGraphNode } from "@litegraph-ts/core";
 import { get } from "svelte/store";
 import type { ComfyNodeID } from "./api";
 import { type SerializedPrompt } from "./components/ComfyApp";
 import workflowState from "./stores/workflowState";
 import { ImageViewer } from "./ImageViewer";
+import configState from "$lib/stores/configState";
 
 export function clamp(n: number, min: number, max: number): number {
     if (max <= min)
@@ -52,6 +53,14 @@ export function* enumerate<T>(iterable: Iterable<T>): Iterable<[number, T]> {
     }
 }
 
+export async function timeExecutionMs(fn: (...any) => Promise<any>, ...args: any[]): Promise<number> {
+    const start = new Date().getTime();
+
+    await fn.apply(null, args)
+
+    return new Date().getTime() - start;
+}
+
 export function download(filename: string, text: string, type: string = "text/plain") {
     const blob = new Blob([text], { type: type });
     const url = URL.createObjectURL(blob);
@@ -65,6 +74,27 @@ export function download(filename: string, text: string, type: string = "text/pl
         window.URL.revokeObjectURL(url);
     }, 0);
 }
+
+export function downloadCanvas(canvas: HTMLCanvasElement, filename: string, type: string = "image/png") {
+    var link = document.createElement('a');
+    link.download = filename;
+    link.href = canvas.toDataURL(type);
+    link.click();
+}
+
+export const MAX_LOCAL_STORAGE_MB = 5;
+
+export function getLocalStorageUsedMB(): number {
+    var total = 0;
+    for (const x in localStorage) {
+        // Value is multiplied by 2 due to data being stored in `utf-16` format, which requires twice the space.
+        const amount = (localStorage[x].length * 2) / 1024 / 1024;
+        if (!isNaN(amount) && localStorage.hasOwnProperty(x)) {
+            total += amount;
+        }
+    }
+    return total
+};
 
 export function startDrag(evt: MouseEvent, layoutState: WritableLayoutStateStore) {
     const dragItemId: string = evt.target.dataset["dragItemId"];
@@ -268,7 +298,7 @@ export function convertComfyOutputToGradio(output: SerializedPromptOutput): Grad
 }
 
 export function convertComfyOutputEntryToGradio(r: ComfyImageLocation): GradioFileData {
-    const url = `http://${location.hostname}:8188` // TODO make configurable
+    const url = configState.getBackendURL();
     const params = new URLSearchParams(r)
     const fileData: GradioFileData = {
         name: r.filename,
@@ -284,12 +314,12 @@ export function convertComfyOutputToComfyURL(output: string | ComfyImageLocation
         return output;
 
     const params = new URLSearchParams(output)
-    const url = `http://${location.hostname}:8188` // TODO make configurable
+    const url = configState.getBackendURL();
     return url + "/view?" + params
 }
 
 export function convertGradioFileDataToComfyURL(image: GradioFileData, type: ComfyUploadImageType = "input"): string {
-    const baseUrl = `http://${location.hostname}:8188` // TODO make configurable
+    const baseUrl = configState.getBackendURL();
     const params = new URLSearchParams({ filename: image.name, subfolder: "", type })
     return `${baseUrl}/view?${params}`
 }
@@ -313,7 +343,7 @@ export function convertFilenameToComfyURL(filename: string,
         subfolder,
         type
     })
-    const url = `http://${location.hostname}:8188` // TODO make configurable
+    const url = configState.getBackendURL();
     return url + "/view?" + params
 }
 
@@ -345,7 +375,7 @@ export interface ComfyUploadImageAPIResponse {
 export async function uploadImageToComfyUI(blob: Blob, filename: string, type: ComfyUploadImageType, subfolder: string = "", overwrite: boolean = false): Promise<ComfyImageLocation> {
     console.debug("[utils] Uploading image to ComfyUI", filename, blob.size)
 
-    const url = `http://${location.hostname}:8188` // TODO make configurable
+    const url = configState.getBackendURL();
 
     const formData = new FormData();
     formData.append("image", blob, filename);
@@ -411,6 +441,8 @@ export type ComfyBoxImageMetadata = {
     width?: number,
     /* Image height. */
     height?: number,
+    /* Child images associated with this image, like masks. */
+    children: ComfyBoxImageMetadata[]
 }
 
 export function isComfyBoxImageMetadata(value: any): value is ComfyBoxImageMetadata {
@@ -435,6 +467,7 @@ export function filenameToComfyBoxMetadata(filename: string, type: ComfyUploadIm
         },
         name: "Filename",
         tags: [],
+        children: []
     }
 }
 
@@ -444,6 +477,7 @@ export function comfyFileToComfyBoxMetadata(comfyUIFile: ComfyImageLocation): Co
         comfyUIFile,
         name: "File",
         tags: [],
+        children: []
     }
 }
 
@@ -560,4 +594,115 @@ export function getLitegraphType(param: any): SlotType | null {
         default:
             return null;
     }
+}
+
+export function calcNodesBoundingBox(nodes: SerializedLGraphNode[]): Vector4 {
+    let min_x = Number.MAX_SAFE_INTEGER;
+    let max_x = 0;
+    let min_y = Number.MAX_SAFE_INTEGER;
+    let max_y = 0;
+
+    for (const node of Object.values(nodes)) {
+        min_x = Math.min(node.pos[0], min_x);
+        max_x = Math.max(node.pos[0] + node.size[0], max_x);
+        min_y = Math.min(node.pos[1], min_y);
+        max_y = Math.max(node.pos[1] + node.size[1], max_y);
+    }
+
+    return [min_x, min_y, max_x, max_y];
+}
+
+export async function readFileToText(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = async () => {
+            resolve(reader.result as string);
+        };
+        reader.readAsText(file);
+    })
+}
+
+
+export function nextLetter(s: string): string {
+    return s.replace(/([a-zA-Z])[^a-zA-Z]*$/, function(a) {
+        var c = a.charCodeAt(0);
+        switch (c) {
+            case 90: return 'A';
+            case 122: return 'a';
+            default: return String.fromCharCode(++c);
+        }
+    });
+}
+
+export function playSound(sound: string) {
+    const url = `${location.origin}/sound/${sound}`;
+    const audio = new Audio(url);
+    audio.play();
+}
+
+export interface ComfyBatchUploadResult {
+    error?: string;
+    files: Array<ComfyImageLocation>;
+}
+
+export type ComfyBatchBlob = {
+    blob: Blob,
+    filename: string,
+    overwrite?: boolean
+}
+
+export async function batchUploadFilesToComfyUI(files: Array<File>): Promise<ComfyBatchUploadResult> {
+    const blobs = files.map(f => { return { blob: f, filename: f.name } })
+    return batchUploadBlobsToComfyUI(blobs)
+}
+
+export async function batchUploadBlobsToComfyUI(blobs: ComfyBatchBlob[]): Promise<ComfyBatchUploadResult> {
+    const url = configState.getBackendURL();
+
+    const requests = blobs.map(async (blob) => {
+        const formData = new FormData();
+        formData.append("image", blob.blob, blob.filename);
+        if (blob.overwrite) {
+            formData.append("overwrite", "true")
+        }
+        return fetch(new Request(url + "/upload/image", {
+            body: formData,
+            method: 'POST'
+        }))
+            .then(r => r.json())
+            .catch(error => error);
+    });
+
+    return Promise.all(requests)
+        .then((results) => {
+            const errors = []
+            const files = []
+
+            for (const r of results) {
+                if (r instanceof Error) {
+                    errors.push(r.toString())
+                }
+                else {
+                    // bare filename of image
+                    const resp = r as ComfyUploadImageAPIResponse;
+                    files.push({
+                        filename: resp.name,
+                        subfolder: "",
+                        type: "input"
+                    })
+                }
+            }
+
+            let error = null;
+            if (errors && errors.length > 0)
+                error = "Upload error(s):\n" + errors.join("\n");
+
+            return { error, files }
+        })
+}
+
+export function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {
+    return new Promise(function(resolve) {
+        canvas.toBlob(resolve);
+    });
 }

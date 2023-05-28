@@ -8,7 +8,8 @@
      date?: string,
      status: QueueUIEntryStatus,
      images?: string[], // URLs
-     details?: string // shown in a tooltip on hover
+     details?: string, // shown in a tooltip on hover
+     error?: WorkflowError
  }
 </script>
 
@@ -21,15 +22,14 @@
  import { convertComfyOutputToComfyURL, convertFilenameToComfyURL, getNodeInfo, truncateString } from "$lib/utils"
  import type { Writable } from "svelte/store";
  import type { QueueItemType } from "$lib/api";
- import { ImageViewer } from "$lib/ImageViewer";
  import { Button } from "@gradio/button";
  import type ComfyApp from "./ComfyApp";
- import { tick } from "svelte";
+ import { getContext, tick } from "svelte";
  import Modal from "./Modal.svelte";
- import DropZone from "./DropZone.svelte";
-	import workflowState from "$lib/stores/workflowState";
+ import { type WorkflowError } from "$lib/stores/workflowState";
  import ComfyQueueListDisplay from "./ComfyQueueListDisplay.svelte";
  import ComfyQueueGridDisplay from "./ComfyQueueGridDisplay.svelte";
+	import { WORKFLOWS_VIEW } from "./ComfyBoxWorkflowsView.svelte";
 
  export let app: ComfyApp;
 
@@ -37,6 +37,8 @@
  let queueRunning: Writable<QueueEntry[]> | null = null;
  let queueCompleted: Writable<CompletedQueueEntry[]> | null = null;
  let queueList: HTMLDivElement | null = null;
+
+ const { showError } = getContext(WORKFLOWS_VIEW) as any;
 
  $: if ($queueState) {
      queuePending = $queueState.queuePending
@@ -144,13 +146,16 @@
      if (entry.extraData?.workflowTitle != null) {
          message = `${entry.extraData.workflowTitle}`
      }
-     if (subgraphs?.length > 0)
-         message += ` (${subgraphs.join(', ')})`
+
+     if (subgraphs && subgraphs.length > 0) {
+         const subgraphsString = subgraphs.join(', ')
+         message += ` (${subgraphsString})`
+     }
 
      let submessage = `Nodes: ${Object.keys(entry.prompt).length}`
 
      if (Object.keys(entry.outputs).length > 0) {
-         const imageCount = Object.values(entry.outputs).flatMap(o => o.images).length
+         const imageCount = Object.values(entry.outputs).filter(o => o.images).flatMap(o => o.images).length
          submessage = `Images: ${imageCount}`
      }
 
@@ -172,14 +177,24 @@
          result.images = thumbnails.map(convertComfyOutputToComfyURL);
      }
 
+     const outputs = Object.values(entry.outputs)
+                           .filter(o => o.images)
+                           .flatMap(o => o.images)
+                           .map(convertComfyOutputToComfyURL);
+     if (outputs) {
+         result.images = result.images.concat(outputs)
+     }
+
      return result;
  }
 
  function convertCompletedEntry(entry: CompletedQueueEntry): QueueUIEntry {
      const result = convertEntry(entry.entry, entry.status);
 
-     const images = Object.values(entry.entry.outputs).flatMap(o => o.images)
-         .map(convertComfyOutputToComfyURL);
+     const images = Object.values(entry.entry.outputs)
+                          .filter(o => o.images)
+                          .flatMap(o => o.images)
+                          .map(convertComfyOutputToComfyURL);
      result.images = images
 
      if (entry.message)
@@ -187,7 +202,7 @@
      else if (entry.status === "interrupted" || entry.status === "all_cached")
          result.submessage = "Prompt was interrupted."
      if (entry.error)
-         result.details = entry.error
+         result.error = entry.error
 
      return result;
  }
@@ -201,7 +216,7 @@
          await tick(); // Wait for list size to be recalculated
          queueList.scroll({ top: queueList.scrollHeight })
      }
-     console.warn("[ComfyQueue] BUILDQUEUE", _entries, $queuePending, $queueRunning)
+     console.warn("[ComfyQueue] BUILDQUEUE", _entries.length, $queuePending.length, $queueRunning.length)
  }
 
  async function updateFromHistory() {
@@ -209,7 +224,7 @@
      if (queueList) {
          queueList.scrollTo(0, 0);
      }
-     console.warn("[ComfyQueue] BUILDHISTORY", _entries, $queueCompleted)
+     console.warn("[ComfyQueue] BUILDHISTORY", _entries.length, $queueCompleted.length)
  }
 
  async function interrupt() {
@@ -221,10 +236,20 @@
  let selectedPrompt = null;
  let selectedImages = [];
  function showPrompt(entry: QueueUIEntry) {
-     selectedPrompt = entry.entry.prompt;
-     selectedImages = entry.images;
-     showModal = true;
-     expandAll = false
+     if (entry.error != null) {
+         showModal = false;
+         expandAll = false;
+         selectedPrompt = null;
+         selectedImages = [];
+
+         showError(entry.entry.promptID);
+     }
+     else {
+         selectedPrompt = entry.entry.prompt;
+         selectedImages = entry.images;
+         showModal = true;
+         expandAll = false
+     }
  }
 
  function closeModal() {
@@ -344,10 +369,11 @@
 <style lang="scss">
  $pending-height: 200px;
  $display-mode-buttons-height: 2rem;
+ $pane-mode-buttons-height: 2.5rem;
  $bottom-bar-height: 70px;
  $workflow-tabs-height: 2.5rem;
  $mode-buttons-height: 30px;
- $queue-height: calc(100vh - #{$pending-height} - #{$mode-buttons-height} - #{$bottom-bar-height} - #{$workflow-tabs-height} - 0.9rem);
+ $queue-height: calc(100vh - #{$pending-height} - #{$pane-mode-buttons-height} - #{$mode-buttons-height} - #{$bottom-bar-height} - #{$workflow-tabs-height} - 0.9rem);
  $queue-height-history: calc(#{$queue-height} - #{$display-mode-buttons-height});
 
  .prompt-modal-header {

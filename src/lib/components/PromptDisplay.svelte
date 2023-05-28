@@ -10,7 +10,7 @@
  import type { Styles } from "@gradio/utils";
  import { comfyFileToComfyBoxMetadata, comfyURLToComfyFile, countNewLines } from "$lib/utils";
  import ReceiveOutputTargets from "./modal/ReceiveOutputTargets.svelte";
- import workflowState, { type ComfyWorkflow, type WorkflowReceiveOutputTargets } from "$lib/stores/workflowState";
+ import workflowState, { type ComfyBoxWorkflow, type WorkflowReceiveOutputTargets } from "$lib/stores/workflowState";
  import type { ComfyReceiveOutputNode } from "$lib/nodes/actions";
  import type ComfyApp from "./ComfyApp";
 
@@ -100,7 +100,7 @@
      // ImageViewer.instance.showLightbox(e.detail)
  }
 
- function sendOutput(workflow: ComfyWorkflow, targetNode: ComfyReceiveOutputNode) {
+ function sendOutput(workflow: ComfyBoxWorkflow, targetNode: ComfyReceiveOutputNode) {
      if (workflow == null || targetNode == null)
          return
 
@@ -128,7 +128,7 @@
 <div class="prompt-display">
     <div class="prompt-and-sends">
         <Block>
-            <Accordion label="Prompt" open={expandAll}>
+            <Accordion label="Prompt" open={expandAll || comfyBoxImages.length === 0}>
                 <div class="scroll-container">
                     <Block>
                         {#each Object.entries(prompt) as [nodeID, inputs], i}
@@ -180,18 +180,20 @@
                 </div>
             </Accordion>
         </Block>
-        <Block>
-            <Accordion label="Send Outputs To..." open={true}>
-                <Block>
-                    <BlockTitle>Output type: {litegraphType}</BlockTitle>
-                    {#if receiveTargets.length > 0}
-                        <ReceiveOutputTargets {receiveTargets} on:select={(e) => sendOutput(e.detail.workflow, e.detail.targetNode)} />
-                    {:else}
-                        <div class="outputs-message">No receive output targets found across all workflows.</div>
-                    {/if}
-                </Block>
-            </Accordion>
-        </Block>
+        {#if comfyBoxImages.length > 0}
+            <Block>
+                <Accordion label="Send Outputs To..." open={true}>
+                    <Block>
+                        <BlockTitle>Output type: {litegraphType}</BlockTitle>
+                        {#if receiveTargets.length > 0}
+                            <ReceiveOutputTargets {receiveTargets} on:select={(e) => sendOutput(e.detail.workflow, e.detail.targetNode)} />
+                        {:else}
+                                <div class="outputs-message">No receive output targets found across all workflows.</div>
+                        {/if}
+                    </Block>
+                </Accordion>
+            </Block>
+        {/if}
     </div>
     {#if images.length > 0}
         <div class="image-container">
