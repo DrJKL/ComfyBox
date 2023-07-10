@@ -39,6 +39,7 @@ import DanbooruTags from "$lib/DanbooruTags";
 import { deserializeTemplateFromSVG, type SerializedComfyBoxTemplate } from "$lib/ComfyBoxTemplate";
 import templateState from "$lib/stores/templateState";
 import { formatValidationError, type ComfyAPIPromptErrorResponse, formatExecutionError, type ComfyExecutionError } from "$lib/apiErrors";
+import systemState from "$lib/stores/systemState";
 
 export const COMFYBOX_SERIAL_VERSION = 1;
 
@@ -211,7 +212,13 @@ export default class ComfyApp {
         this.lCanvas.allow_interaction = uiUnlocked;
 
         // await this.#invokeExtensionsAsync("init");
-        const defs = await this.api.getNodeDefs();
+        let defs;
+        try {
+            defs = await this.api.getNodeDefs();
+        }
+        catch (error) {
+            throw new Error(`Could not reach ComfyUI at ${this.api.getBackendUrl()}`);
+        }
         await this.registerNodes(defs);
 
         // Load previous workflow
@@ -261,18 +268,29 @@ export default class ComfyApp {
         return Promise.resolve();
     }
 
-    /*
-     * TODO
-     */
     async loadConfig() {
         try {
-            const config = await fetch(`/config.json`, { cache: "no-store" });
-            const newConfig = await config.json() as ConfigState;
-            configState.set({ ...get(configState), ...newConfig });
+            console.log("Loading config.json...")
+            const config = localStorage.getItem("config")
+            if (config == null)
+                configState.loadDefault();
+            else
+                configState.load(JSON.parse(config));
         }
         catch (error) {
-            console.error(`Failed to load config`, error)
+            console.error(`Failed to load config, falling back to defaults`, error)
+            configState.loadDefault();
         }
+
+        // configState.onChange("linkDisplayType", (newValue) => {
+        //     if (!this.lCanvas)
+        //         return;
+
+        //     this.lCanvas.links_render_mode = newValue;
+        //     this.lCanvas.setDirty(true, true);
+        // })
+
+        configState.runOnChangedEvents();
     }
 
     async loadBuiltInTemplates(): Promise<SerializedComfyBoxTemplate[]> {
@@ -351,7 +369,7 @@ export default class ComfyApp {
         }
     }
 
-    saveStateToLocalStorage() {
+    saveStateToLocalStorage(doNotify: boolean = true) {
         try {
             uiState.update(s => { s.forceSaveUserState = true; return s; })
             const state = get(workflowState)
@@ -363,10 +381,12 @@ export default class ComfyApp {
             for (const workflow of workflows)
                 workflow.isModified = false;
             workflowState.set(get(workflowState));
-            notify("Saved to local storage.")
+            if (doNotify)
+                notify("Saved to local storage.")
         }
         catch (err) {
-            notify(`Failed saving to local storage:\n${err}`, { type: "error" })
+            if (doNotify)
+                notify(`Failed saving to local storage:\n${err}`, { type: "error" })
         }
         finally {
             uiState.update(s => { s.forceSaveUserState = null; return s; })
@@ -384,6 +404,9 @@ export default class ComfyApp {
             return false;
 
         const workflows = state.workflows as SerializedAppState[];
+        if (workflows.length === 0)
+            return false;
+
         await Promise.all(workflows.map(w => {
             return this.openWorkflow(w, { refreshCombos: defs, warnMissingNodeTypes: false, setActive: false }).catch(error => {
                 console.error("Failed restoring previous workflow", error)
@@ -628,6 +651,27 @@ export default class ComfyApp {
             }
         });
 
+        this.api.addEventListener("b_preview", (imageBlob: Blob) => {
+            queueState.previewUpdated(imageBlob);
+        });
+
+        const config = get(configState);
+
+        if (config.pollSystemStatsInterval > 0) {
+            const interval = Math.max(config.pollSystemStatsInterval, 250);
+            const refresh = async () => {
+                try {
+                    const resp = await this.api.getSystemStats();
+                    systemState.updateState(resp)
+                } catch (error) {
+                    // console.debug("Error retrieving stats", error)
+                    systemState.updateState({ devices: [] })
+                }
+                setTimeout(refresh, interval);
+            }
+            setTimeout(refresh, interval);
+        }
+
         this.api.init();
     }
 
@@ -706,9 +750,11 @@ export default class ComfyApp {
     }
 
     private requestPermissions() {
-        if (Notification.permission === "default") {
-            Notification.requestPermission()
-                .then((result) => console.log("Notification status:", result));
+        if (window.Notification != null) {
+            if (window.Notification.permission === "default") {
+                window.Notification.requestPermission()
+                    .then((result) => console.log("Notification status:", result));
+            }
         }
     }
 
@@ -917,7 +963,11 @@ export default class ComfyApp {
         if (workflow.attrs.queuePromptButtonRunWorkflow) {
             // Hold control to queue at the front
             const num = this.ctrlDown ? -1 : 0;
-            this.queuePrompt(workflow, num, 1);
+            let tag = null;
+            if (workflow.attrs.queuePromptButtonDefaultWorkflow) {
+                tag = workflow.attrs.queuePromptButtonDefaultWorkflow
+            }
+            this.queuePrompt(workflow, num, 1, tag);
         }
     }
 
@@ -979,7 +1029,7 @@ export default class ComfyApp {
             tag = null;
 
         if (targetWorkflow.attrs.showDefaultNotifications) {
-            notify("Prompt queued.", { type: "info" });
+            notify("Prompt queued.", { type: "info", showOn: "web" });
         }
 
         this.processingQueue = true;
@@ -1015,11 +1065,11 @@ export default class ComfyApp {
 
                     const p = this.graphToPrompt(workflow, tag);
                     const wf = this.serialize(workflow)
-                    console.debug(graphToGraphVis(workflow.graph))
-                    console.debug(promptToGraphVis(p))
+                    // console.debug(graphToGraphVis(workflow.graph))
+                    // console.debug(promptToGraphVis(p))
 
                     const stdPrompt = this.stdPromptSerializer.serialize(p);
-                    console.warn("STD", stdPrompt);
+                    // console.warn("STD", stdPrompt);
 
                     const extraData: ComfyBoxPromptExtraData = {
                         extra_pnginfo: {
@@ -1052,8 +1102,8 @@ export default class ComfyApp {
                             workflowState.promptError(workflow.id, errorPromptID)
                         }
                         else {
-                            queueState.afterQueued(workflow.id, response.promptID, num, p.output, extraData)
-                            workflowState.afterQueued(workflow.id, response.promptID, p, extraData)
+                            queueState.afterQueued(workflow.id, response.promptID, response.number, p.output, extraData)
+                            workflowState.afterQueued(workflow.id, response.promptID)
                         }
                     } catch (err) {
                         errorMes = err?.toString();

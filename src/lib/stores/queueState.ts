@@ -7,6 +7,9 @@ import { playSound } from "$lib/utils";
 import { get, writable, type Writable } from "svelte/store";
 import { v4 as uuidv4 } from "uuid";
 import workflowState, { type WorkflowError, type WorkflowExecutionError, type WorkflowInstID, type WorkflowValidationError } from "./workflowState";
+import configState from "./configState";
+import uiQueueState from "./uiQueueState";
+import type { NodeID } from "@litegraph-ts/core";
 
 export type QueueEntryStatus = "success" | "validation_failed" | "error" | "interrupted" | "all_cached" | "unknown";
 
@@ -19,6 +22,7 @@ type QueueStateOps = {
     executionCached: (promptID: PromptID, nodes: ComfyNodeID[]) => void,
     executionError: (error: ComfyExecutionError) => CompletedQueueEntry | null,
     progressUpdated: (progress: Progress) => void
+    previewUpdated: (imageBlob: Blob) => void
     getQueueEntry: (promptID: PromptID) => QueueEntry | null;
     afterQueued: (workflowID: WorkflowInstID, promptID: PromptID, number: number, prompt: SerializedPromptInputsAll, extraData: any) => void
     queueItemDeleted: (type: QueueItemType, id: PromptID) => void;
@@ -79,8 +83,33 @@ export type QueueState = {
     queuePending: Writable<QueueEntry[]>,
     queueCompleted: Writable<CompletedQueueEntry[]>,
     queueRemaining: number | "X" | null;
+
+    /*
+     * Currently executing node if any
+     */
     runningNodeID: ComfyNodeID | null;
+
+    /*
+     * Currently executing prompt if any
+     */
+    runningPromptID: PromptID | null;
+
+    /*
+     * Nodes which should be rendered as "executing" in the frontend (green border).
+     * This includes the running node and all its parent subgraphs
+     */
+    executingNodes: Set<NodeID>;
+
+    /*
+     * Progress for the current node reported by the frontend
+     */
     progress: Progress | null,
+
+    /*
+     * Image preview URL
+     */
+    previewURL: string | null,
+
     /**
      * If true, user pressed the "Interrupt" button in the frontend. Disable the
      * button and wait until the next prompt starts running to re-enable it
@@ -96,7 +125,9 @@ const store: Writable<QueueState> = writable({
     queueCompleted: writable([]),
     queueRemaining: null,
     runningNodeID: null,
+    executingNodes: new Set(),
     progress: null,
+    preview: null,
     isInterrupting: false
 })
 
@@ -150,6 +181,19 @@ function progressUpdated(progress: Progress) {
     store.update((s) => {
         s.progress = progress;
         return s
+    })
+}
+
+function previewUpdated(imageBlob: Blob) {
+    console.debug("[queueState] previewUpdated", imageBlob?.type)
+    store.update(s => {
+        if (s.runningNodeID == null) {
+            s.previewURL = null;
+            return s;
+        }
+
+        s.previewURL = URL.createObjectURL(imageBlob);
+        return s;
     })
 }
 
@@ -270,6 +314,7 @@ function executingUpdated(promptID: PromptID, runningNodeID: ComfyNodeID | null)
 
     store.update((s) => {
         s.progress = null;
+        s.executingNodes.clear();
 
         const [index, entry, queue] = findEntryInPending(promptID);
         if (runningNodeID != null) {
@@ -277,20 +322,36 @@ function executingUpdated(promptID: PromptID, runningNodeID: ComfyNodeID | null)
                 entry.nodesRan.add(runningNodeID)
             }
             s.runningNodeID = runningNodeID;
+            s.runningPromptID = promptID;
+
+            if (entry?.extraData?.workflowID) {
+                const workflow = workflowState.getWorkflow(entry.extraData.workflowID);
+                if (workflow != null) {
+                    let node = workflow.graph.getNodeByIdRecursive(s.runningNodeID);
+                    while (node != null) {
+                        s.executingNodes.add(node.id);
+                        node = node.graph?._subgraph_node;
+                    }
+                }
+            }
         }
         else {
             // Prompt finished executing.
             if (entry != null) {
                 const totalNodesInPrompt = Object.keys(entry.prompt).length
                 if (entry.cachedNodes.size >= Object.keys(entry.prompt).length) {
-                    notify("Prompt was cached, nothing to run.", { type: "warning" })
+                    notify("Prompt was cached, nothing to run.", { type: "warning", showOn: "web" })
                     moveToCompleted(index, queue, "all_cached", "(Execution was cached)");
                 }
                 else if (entry.nodesRan.size >= totalNodesInPrompt) {
                     const workflow = workflowState.getWorkflow(entry.extraData.workflowID);
                     if (workflow?.attrs.showDefaultNotifications) {
-                        notify("Prompt finished!", { type: "success" });
-                        playSound("notification.mp3")
+                        if (configState.canShowNotificationText()) {
+                            notify("Prompt finished!", { type: "success" });
+                        }
+                        if (configState.canPlayNotificationSound()) {
+                            playSound("notification.mp3")
+                        }
                     }
                     moveToCompleted(index, queue, "success")
                 }
@@ -303,7 +364,10 @@ function executingUpdated(promptID: PromptID, runningNodeID: ComfyNodeID | null)
                 console.debug("[queueState] Could not find in pending! (executingUpdated)", promptID)
             }
             s.progress = null;
+            s.previewURL = null;
             s.runningNodeID = null;
+            s.runningPromptID = null;
+            s.executingNodes.clear();
         }
         entry_ = entry;
         return s
@@ -327,7 +391,10 @@ function executionCached(promptID: PromptID, nodes: ComfyNodeID[]) {
         }
         s.isInterrupting = false; // TODO move to start
         s.progress = null;
+        s.previewURL = null;
         s.runningNodeID = null;
+        s.runningPromptID = null;
+        s.executingNodes.clear();
         return s
     })
 }
@@ -344,7 +411,10 @@ function executionError(error: ComfyExecutionError): CompletedQueueEntry | null 
             console.error("[queueState] Could not find in pending! (executionError)", error.prompt_id)
         }
         s.progress = null;
+        s.previewURL = null;
         s.runningNodeID = null;
+        s.runningPromptID = null;
+        s.executingNodes.clear();
         return s
     })
     return entry_;
@@ -378,6 +448,9 @@ function executionStart(promptID: PromptID) {
             moveToRunning(index, queue)
         }
         s.isInterrupting = false;
+        s.runningNodeID = null;
+        s.runningPromptID = promptID;
+        s.executingNodes.clear();
         return s
     })
 }
@@ -439,10 +512,12 @@ function queueCleared(type: QueueItemType) {
     store.update(s => {
         if (type === "queue") {
             s.queuePending.set([]);
-            s.queueRunning.set([]);
             s.queueRemaining = 0;
             s.runningNodeID = null;
+            s.runningPromptID = null;
             s.progress = null;
+            s.previewURL = null;
+            s.executingNodes.clear();
         }
         else {
             s.queueCompleted.set([])
@@ -496,6 +571,7 @@ const queueStateStore: WritableQueueStateStore =
     historyUpdated,
     statusUpdated,
     progressUpdated,
+    previewUpdated,
     executionStart,
     executingUpdated,
     executionCached,

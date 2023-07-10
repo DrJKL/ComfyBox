@@ -4,10 +4,12 @@ import type { FileData as GradioFileData } from "@gradio/upload";
 import { Subgraph, type LGraph, type LGraphNode, type LLink, type SerializedLGraph, type UUID, type NodeID, type SlotType, type Vector4, type SerializedLGraphNode } from "@litegraph-ts/core";
 import { get } from "svelte/store";
 import type { ComfyNodeID } from "./api";
-import { type SerializedPrompt } from "./components/ComfyApp";
-import workflowState from "./stores/workflowState";
+import ComfyApp, { type SerializedPrompt } from "./components/ComfyApp";
+import workflowState, { type WorkflowReceiveOutputTargets } from "./stores/workflowState";
 import { ImageViewer } from "./ImageViewer";
 import configState from "$lib/stores/configState";
+import SendOutputModal, { type SendOutputModalResult } from "$lib/components/modal/SendOutputModal.svelte";
+import { OutputThumbnailsMode } from "./stores/configDefs";
 
 export function clamp(n: number, min: number, max: number): number {
     if (max <= min)
@@ -299,29 +301,78 @@ export function convertComfyOutputToGradio(output: SerializedPromptOutput): Grad
 
 export function convertComfyOutputEntryToGradio(r: ComfyImageLocation): GradioFileData {
     const url = configState.getBackendURL();
-    const params = new URLSearchParams(r)
     const fileData: GradioFileData = {
         name: r.filename,
         orig_name: r.filename,
         is_file: false,
-        data: url + "/view?" + params
+        data: convertComfyOutputToComfyURL(r)
     }
     return fileData
 }
 
-export function convertComfyOutputToComfyURL(output: string | ComfyImageLocation): string {
+function convertComfyPreviewTypeToString(preview: ComfyImagePreviewType): string {
+    const arr = []
+    switch (preview.format) {
+        case ComfyImagePreviewFormat.JPEG:
+            arr.push("jpeg")
+            break;
+        case ComfyImagePreviewFormat.WebP:
+        default:
+            arr.push("webp")
+            break;
+    }
+
+    arr.push(String(preview.quality))
+
+    return arr.join(";")
+}
+
+export function convertComfyOutputToComfyURL(output: string | ComfyImageLocation, thumbnail: boolean = false): string {
     if (typeof output === "string")
         return output;
 
-    const params = new URLSearchParams(output)
+    const paramsObj = {
+        filename: output.filename,
+        subfolder: output.subfolder,
+        type: output.type
+    }
+
+    if (thumbnail) {
+        let doThumbnail: boolean;
+
+        switch (get(configState).outputThumbnails) {
+            case OutputThumbnailsMode.AlwaysFullSize:
+                doThumbnail = false;
+                break;
+            case OutputThumbnailsMode.AlwaysThumbnail:
+                doThumbnail = true;
+                break;
+            case OutputThumbnailsMode.Auto:
+            default:
+                // TODO detect colab, etc.
+                if (isMobileBrowser(navigator.userAgent)) {
+                    doThumbnail = true;
+                }
+                else {
+                    doThumbnail = false;
+                }
+                break;
+        }
+
+        if (doThumbnail) {
+            output.preview = {
+                format: ComfyImagePreviewFormat.WebP,
+                quality: 80
+            }
+        }
+    }
+
+    if (output.preview != null)
+        paramsObj["preview"] = convertComfyPreviewTypeToString(output.preview)
+
+    const params = new URLSearchParams(paramsObj)
     const url = configState.getBackendURL();
     return url + "/view?" + params
-}
-
-export function convertGradioFileDataToComfyURL(image: GradioFileData, type: ComfyUploadImageType = "input"): string {
-    const baseUrl = configState.getBackendURL();
-    const params = new URLSearchParams({ filename: image.name, subfolder: "", type })
-    return `${baseUrl}/view?${params}`
 }
 
 export function convertGradioFileDataToComfyOutput(fileData: GradioFileData, type: ComfyUploadImageType = "input"): ComfyImageLocation {
@@ -333,18 +384,6 @@ export function convertGradioFileDataToComfyOutput(fileData: GradioFileData, typ
         subfolder: "",
         type
     }
-}
-
-export function convertFilenameToComfyURL(filename: string,
-    subfolder: string = "",
-    type: "input" | "output" | "temp" = "output"): string {
-    const params = new URLSearchParams({
-        filename,
-        subfolder,
-        type
-    })
-    const url = configState.getBackendURL();
-    return url + "/view?" + params
 }
 
 export function jsonToJsObject(json: string): string {
@@ -412,6 +451,16 @@ export interface SerializedPromptOutput {
     [key: string]: any
 }
 
+export enum ComfyImagePreviewFormat {
+    WebP = "webp",
+    JPEG = "jpeg",
+}
+
+export type ComfyImagePreviewType = {
+    format: ComfyImagePreviewFormat,
+    quality: number
+}
+
 /** Raw output entry as received from ComfyUI's backend */
 export type ComfyImageLocation = {
     /* Filename with extension in the subfolder. */
@@ -419,7 +468,19 @@ export type ComfyImageLocation = {
     /* Subfolder in the containing folder. */
     subfolder: string,
     /* Base ComfyUI folder where the image is located. */
-    type: ComfyUploadImageType
+    type: ComfyUploadImageType,
+    /*
+     * Preview information
+     *
+     * "format;quality"
+     *
+     * ex)
+     * webp;50 -> webp, quality 50
+     * webp;50 -> webp, quality 50
+     * jpeg;80 -> rgb, jpeg, quality 80
+     *
+     */
+    preview?: ComfyImagePreviewType
 }
 
 /*
@@ -543,27 +604,54 @@ export function comfyBoxImageToComfyURL(image: ComfyBoxImageMetadata): string {
     return convertComfyOutputToComfyURL(image.comfyUIFile)
 }
 
+function parseComfyUIPreviewType(previewStr: string): ComfyImagePreviewType {
+    let split = previewStr.split(";")
+    let format = ComfyImagePreviewFormat.WebP;
+    if (split[0] === "webp")
+        format = ComfyImagePreviewFormat.WebP;
+    else if (split[0] === "jpeg")
+        format = ComfyImagePreviewFormat.JPEG;
+
+    let quality = parseInt(split[0])
+    if (isNaN(quality))
+        quality = 80
+
+    return { format, quality }
+}
+
 export function comfyURLToComfyFile(urlString: string): ComfyImageLocation | null {
     const url = new URL(urlString);
     const params = new URLSearchParams(url.search);
     const filename = params.get("filename")
     const type = params.get("type") as ComfyUploadImageType;
     const subfolder = params.get("subfolder") || ""
+    const previewStr = params.get("preview") || null;
+    let preview = null
+
+    if (previewStr != null) {
+        preview = parseComfyUIPreviewType(preview);
+    }
 
     // If at least filename and type exist then we're good
     if (filename != null && type != null) {
-        return { filename, type, subfolder }
+        return { filename, type, subfolder, preview }
     }
 
     return null;
 }
 
-export function showLightbox(images: string[], index: number, e: Event) {
+export function showLightbox(images: ComfyImageLocation[] | string[], index: number, e: Event) {
     e.preventDefault()
     if (!images)
         return
 
-    ImageViewer.instance.showModal(images, index);
+    let images_: string[]
+    if (typeof images[0] === "object")
+        images_ = (images as ComfyImageLocation[]).map(v => convertComfyOutputToComfyURL(v))
+    else
+        images_ = (images as string[])
+
+    ImageViewer.instance.showModal(images_, index);
 
     e.stopPropagation()
 }
@@ -618,6 +706,9 @@ export async function readFileToText(file: File): Promise<string> {
         reader.onload = async () => {
             resolve(reader.result as string);
         };
+        reader.onerror = async () => {
+            reject(reader.error);
+        }
         reader.readAsText(file);
     })
 }
@@ -635,6 +726,9 @@ export function nextLetter(s: string): string {
 }
 
 export function playSound(sound: string) {
+    if (!configState.canPlayNotificationSound())
+        return;
+
     const url = `${location.origin}/sound/${sound}`;
     const audio = new Audio(url);
     audio.play();
@@ -705,4 +799,32 @@ export function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {
     return new Promise(function(resolve) {
         canvas.toBlob(resolve);
     });
+}
+
+export type SafetensorsMetadata = Record<string, string>
+
+export async function getSafetensorsMetadata(folder: string, filename: string): Promise<SafetensorsMetadata> {
+    const url = configState.getBackendURL();
+    const params = new URLSearchParams({ filename })
+
+    return fetch(new Request(url + `/view_metadata/${folder}?` + params)).then(r => r.json())
+}
+
+export function partition<T>(myArray: T[], chunkSize: number): T[] {
+    let index = 0;
+    const arrayLength = myArray.length;
+    const tempArray = [];
+
+    for (index = 0; index < arrayLength; index += chunkSize) {
+        const myChunk = myArray.slice(index, index + chunkSize);
+        tempArray.push(myChunk);
+    }
+
+    return tempArray;
+}
+
+const MOBILE_USER_AGENTS = ["iPhone", "iPad", "Android", "BlackBerry", "WebOs"].map(a => new RegExp(a, "i"))
+
+export function isMobileBrowser(userAgent: string): boolean {
+    return MOBILE_USER_AGENTS.some(a => userAgent.match(a))
 }

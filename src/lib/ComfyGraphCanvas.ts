@@ -11,6 +11,7 @@ import queueState from "./stores/queueState";
 import selectionState from "./stores/selectionState";
 import templateState from "./stores/templateState";
 import { calcNodesBoundingBox } from "./utils";
+import interfaceState from "./stores/interfaceState";
 
 export type SerializedGraphCanvasState = {
     offset: Vector2,
@@ -24,7 +25,7 @@ export default class ComfyGraphCanvas extends LGraphCanvas {
     activeErrors?: ComfyGraphErrors = null;
     blinkError: ComfyGraphErrorLocation | null = null;
     blinkErrorTime: number = 0;
-    highlightNodeAndInput: [LGraphNode, number] | null = null;
+    highlightNodeAndInput: [LGraphNode, number | null] | null = null;
 
     get comfyGraph(): ComfyGraph | null {
         return this.graph as ComfyGraph;
@@ -103,7 +104,7 @@ export default class ComfyGraphCanvas extends LGraphCanvas {
         let state = get(queueState);
         let ss = get(selectionState);
 
-        const isRunningNode = node.id == state.runningNodeID
+        const isExecuting = state.executingNodes.has(node.id);
         const nodeErrors = this.activeErrors?.errorsByID[node.id];
         const isHighlightedNode = this.highlightNodeAndInput && this.highlightNodeAndInput[0].id === node.id;
 
@@ -118,13 +119,7 @@ export default class ComfyGraphCanvas extends LGraphCanvas {
         //     color = "yellow";
         //     thickness = 5;
         // }
-        if (ss.currentHoveredNodes.has(node.id)) {
-            color = "lightblue";
-        }
-        else if (isRunningNode) {
-            color = "#0f0";
-        }
-        else if (nodeErrors) {
+        if (nodeErrors) {
             const hasExecutionError = nodeErrors.find(e => e.errorType === "execution");
             if (hasExecutionError) {
                 blink = true;
@@ -138,6 +133,21 @@ export default class ComfyGraphCanvas extends LGraphCanvas {
         else if (isHighlightedNode) {
             color = "cyan";
             thickness = 2
+
+            // Blink node if no input highlighted
+            if (this.highlightNodeAndInput[1] == null) {
+                if (this.blinkErrorTime > 0) {
+                    if ((Math.floor(this.blinkErrorTime / 2)) % 2 === 0) {
+                        color = null;
+                    }
+                }
+            }
+        }
+        else if (ss.currentHoveredNodes.has(node.id)) {
+            color = "lightblue";
+        }
+        else if (isExecuting) {
+            color = "#0f0";
         }
 
         if (blink) {
@@ -152,7 +162,7 @@ export default class ComfyGraphCanvas extends LGraphCanvas {
             this.drawNodeOutline(node, ctx, size, mouseOver, fgColor, bgColor, color, thickness)
         }
 
-        if (isRunningNode && state.progress) {
+        if (isExecuting && state.progress) {
             ctx.fillStyle = "green";
             ctx.fillRect(0, 0, size[0] * (state.progress.value / state.progress.max), 6);
             ctx.fillStyle = bgColor;
@@ -171,9 +181,11 @@ export default class ComfyGraphCanvas extends LGraphCanvas {
             }
             if (draw) {
                 const [node, inputSlot] = this.highlightNodeAndInput;
-                ctx.lineWidth = 2;
-                ctx.strokeStyle = color;
-                this.highlightNodeInput(node, inputSlot, ctx);
+                if (inputSlot != null) {
+                    ctx.lineWidth = 2;
+                    ctx.strokeStyle = color;
+                    this.highlightNodeInput(node, inputSlot, ctx);
+                }
             }
         }
     }
@@ -193,6 +205,8 @@ export default class ComfyGraphCanvas extends LGraphCanvas {
         }
     }
 
+    private static CONNECTION_POS: Vector2 = [0, 0];
+
     private highlightNodeInput(node: LGraphNode, inputSlot: SlotNameOrIndex, ctx: CanvasRenderingContext2D) {
         let inputIndex: number;
         if (typeof inputSlot === "number")
@@ -200,7 +214,7 @@ export default class ComfyGraphCanvas extends LGraphCanvas {
         else
             inputIndex = node.findInputSlotIndexByName(inputSlot)
         if (inputIndex !== -1) {
-            let pos = node.getConnectionPos(true, inputIndex);
+            let pos = node.getConnectionPos(true, inputIndex, ComfyGraphCanvas.CONNECTION_POS);
             ctx.beginPath();
             ctx.arc(pos[0] - node.pos[0], pos[1] - node.pos[1], 12, 0, 2 * Math.PI, false)
             ctx.stroke();
@@ -330,7 +344,8 @@ export default class ComfyGraphCanvas extends LGraphCanvas {
     /**
      * Handle keypress
      *
-     * Ctrl + M mute/unmute selected nodes
+     * Ctrl + M      mute/unmute selected nodes
+     * Ctrl + Space  open node searchbox
      */
     override processKey(e: KeyboardEvent): boolean | undefined {
         const res = super.processKey(e);
@@ -350,7 +365,7 @@ export default class ComfyGraphCanvas extends LGraphCanvas {
         }
 
         if (e.type == "keydown") {
-            // Ctrl + M mute/unmute
+            // Ctrl + M - mute/unmute
             if (e.keyCode == 77 && e.ctrlKey) {
                 if (this.selected_nodes) {
                     for (var i in this.selected_nodes) {
@@ -361,6 +376,21 @@ export default class ComfyGraphCanvas extends LGraphCanvas {
                         }
                     }
                 }
+                block_default = true;
+            }
+            // Ctrl + Space - open node searchbox
+            else if (e.keyCode == 32 && e.ctrlKey) {
+                const event = new MouseEvent("click");
+                const searchBox = this.showSearchBox(event);
+                const rect = this.canvas.getBoundingClientRect();
+                const sbRect = searchBox.getBoundingClientRect();
+                const clientX = rect.left + rect.width / 2 - sbRect.width / 2;
+                const clientY = rect.top + rect.height / 2 - sbRect.height / 2
+                searchBox.style.left = `${clientX}px`;
+                searchBox.style.top = `${clientY}px`;
+                // TODO better API
+                event.initMouseEvent("click", true, true, window, 1, clientX, clientY, clientX, clientY, false, false, false, false, 0, null);
+                this.adjustMouseEvent(event);
                 block_default = true;
             }
         }
@@ -700,6 +730,8 @@ export default class ComfyGraphCanvas extends LGraphCanvas {
     }
 
     jumpToNode(node: LGraphNode) {
+        interfaceState.update(s => { s.isJumpingToNode = true; return s; })
+
         this.closeAllSubgraphs();
 
         const subgraphs = Array.from(node.iterateParentSubgraphNodes()).reverse();
@@ -709,9 +741,10 @@ export default class ComfyGraphCanvas extends LGraphCanvas {
         }
 
         this.centerOnNode(node);
+        this.selectNode(node);
     }
 
-    jumpToNodeAndInput(node: LGraphNode, slotIndex: number) {
+    jumpToNodeAndInput(node: LGraphNode, slotIndex: number | null) {
         this.jumpToNode(node);
         this.highlightNodeAndInput = [node, slotIndex];
         this.blinkErrorTime = 20;

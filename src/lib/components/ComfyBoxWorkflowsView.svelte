@@ -1,5 +1,11 @@
 <script context="module" lang="ts">
- export const WORKFLOWS_VIEW: any = {}
+ // workaround a vite HMR bug
+ // shouts out to @rixo
+ // https://github.com/sveltejs/svelte/issues/8655
+ export const WORKFLOWS_VIEW = import.meta.hot?.data?.WORKFLOWS_VIEW || {}
+ if (import.meta.hot?.data) {
+     import.meta.hot.data.WORKFLOWS_VIEW = WORKFLOWS_VIEW
+ }
 </script>
 
 <script lang="ts">
@@ -220,6 +226,26 @@
      }
  }
 
+ async function openGraph(cb: () => void) {
+     const newGraphSize = Math.max(50, graphSize);
+     const willOpenPane = newGraphSize != graphSize
+     graphSize = newGraphSize
+
+     if (willOpenPane) {
+         const graphPane = getGraphPane();
+         if (graphPane) {
+             graphPane.addEventListener("transitionend", cb, { once: true })
+             await tick()
+         }
+         else {
+             cb()
+         }
+     }
+     else {
+         cb()
+     }
+ }
+
  async function showError(promptIDWithError: PromptID) {
      hideError();
 
@@ -247,23 +273,7 @@
          app.lCanvas.jumpToFirstError();
      }
 
-     const newGraphSize = Math.max(50, graphSize);
-     const willOpenPane = newGraphSize != graphSize
-     graphSize = newGraphSize
-
-     if (willOpenPane) {
-         const graphPane = getGraphPane();
-         if (graphPane) {
-             graphPane.addEventListener("transitionend", jumpToError, { once: true })
-             await tick()
-         }
-         else {
-             jumpToError()
-         }
-     }
-     else {
-         jumpToError()
-     }
+     await openGraph(jumpToError)
  }
 
  function hideError() {
@@ -273,7 +283,8 @@
  }
 
  setContext(WORKFLOWS_VIEW, {
-     showError
+     showError,
+     openGraph
  });
 </script>
 
@@ -325,7 +336,7 @@
                         ✕
                     </button>
                     {#if workflow[SHADOW_ITEM_MARKER_PROPERTY_NAME]}
-                        <div in:fade={{duration:200, easing: cubicIn}} class='drag-item-shadow'/>
+                        <div in:fade|global={{duration:200, easing: cubicIn}} class='drag-item-shadow'/>
                     {/if}
                 </button>
             {/each}
@@ -374,6 +385,9 @@
                      <Checkbox label="Disable Interaction" bind:value={$uiState.graphLocked}/> -->
                 <span style="display: inline-flex !important; padding: 0 0.75rem;">
                     <Checkbox label="Auto-Add UI" bind:value={$uiState.autoAddUI}/>
+                </span>
+                <span style="display: inline-flex !important; padding: 0 0.75rem;">
+                    <Checkbox label="Hide Previews" bind:value={$uiState.hidePreviews}/>
                 </span>
                 <!-- <span class="label" for="ui-edit-mode">
                      <BlockTitle>UI Edit mode</BlockTitle>

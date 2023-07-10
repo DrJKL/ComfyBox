@@ -41,7 +41,7 @@ body {
     --comfy-dropdown-item-background-active: var(--secondary-600);
     --comfy-progress-bar-background: var(--neutral-300);
     --comfy-progress-bar-foreground: var(--secondary-300);
-    --comfy-node-name-background: var(--color-red-300);
+    --comfy-node-name-background: var(--color-blue-200);
     --comfy-node-name-foreground: var(--body-text-color);
     --comfy-spinner-main-color: var(--neutral-400);
     --comfy-spinner-accent-color: var(--secondary-500);
@@ -77,11 +77,9 @@ body {
     --comfy-node-name-foreground: var(--body-text-color);
     --comfy-spinner-main-color: var(--neutral-600);
     --comfy-spinner-accent-color: var(--secondary-600);
-}
 
-.mobile {
-    --comfy-progress-bar-background: lightgrey;
-    --comfy-progress-bar-foreground: #B3D8A9
+    --f7-navbar-color: var(--body-text-color);
+    --f7-navbar-bg-color: var(--neutral-800);
 }
 
 @mixin square-button {
@@ -92,33 +90,43 @@ body {
 
      &.primary {
          background: var(--button-primary-background-fill);
-         &:hover {
+         &:hover:not(:disabled) {
              background: var(--button-primary-background-fill-hover);
          }
      }
 
      &.secondary {
          background: var(--button-secondary-background-fill);
-         &:hover {
+         &:hover:not(:disabled) {
              background: var(--button-secondary-background-fill-hover);
          }
      }
 
      &.ternary {
          background: var(--panel-background-fill);
-         &:hover {
+         &:hover:not(:disabled) {
              background: var(--block-background-fill);
+         }
+         &.selected {
+             background: var(--panel-background-fill);
          }
      }
 
-     &:hover {
+     &:hover:not(:disabled) {
          filter: brightness(85%);
      }
-     &:active {
+     &:active:not(:disabled) {
          filter: brightness(50%)
      }
      &.selected {
-         filter: brightness(80%)
+         color: var(--body-text-color);
+         filter: none;
+     }
+
+     &:disabled:not(.selected) {
+         background: var(--neutral-700);
+         color: var(--neutral-400);
+         opacity: 50%;
      }
 }
 
@@ -241,4 +249,16 @@ button {
 // fixes drop item shadow not appearing when dragging template items onto workflow
 :global([data-is-dnd-shadow-item]) {
     min-height: 5rem;
+}
+
+:global(.dark .photo-browser-popup) {
+    background: var(--neutral-700);
+}
+
+:global(.dark .photo-browser-popup-) {
+    background: var(--neutral-700);
+}
+
+:global(.photo-browser-exposed .toolbar ~ .toolbar.photo-browser-thumbs) {
+    transform: translate3d(0, calc(var(--f7-toolbar-height) * 2), 0);
 }

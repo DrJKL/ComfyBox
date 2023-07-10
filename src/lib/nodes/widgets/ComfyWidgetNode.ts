@@ -106,13 +106,18 @@ export default abstract class ComfyWidgetNode<T = any> extends ComfyGraphNode {
         this.value = writable(value)
         this.color ||= color.color
         this.bgColor ||= color.bgColor
-        this.displayWidget = this.addWidget<ITextWidget>(
+        this.displayWidget = this.createDisplayWidget();
+        this.unsubscribe = this.value.subscribe(this.onValueUpdated.bind(this))
+    }
+
+    protected createDisplayWidget(): ITextWidget {
+        const widget = this.addWidget<ITextWidget>(
             "text",
             "Value",
             ""
-        );
-        this.displayWidget.disabled = true; // prevent editing
-        this.unsubscribe = this.value.subscribe(this.onValueUpdated.bind(this))
+        )
+        widget.disabled = true; // prevent editing
+        return widget;
     }
 
     addPropertyAsOutput(propertyName: string, type: string) {
@@ -351,10 +356,5 @@ export default abstract class ComfyWidgetNode<T = any> extends ComfyGraphNode {
         const value = (o as any).comfyValue || LiteGraph.cloneObject(this.defaultValue);
         this.value.set(value);
         this.shownOutputProperties = (o as any).shownOutputProperties;
-    }
-
-    override stripUserState(o: SerializedLGraphNode) {
-        super.stripUserState(o);
-        (o as any).comfyValue = LiteGraph.cloneObject(this.properties.defaultValue);
     }
 }
